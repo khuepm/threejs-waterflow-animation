@@ -56,18 +56,22 @@
       outer : makeGlowTexture('rgba(110, 20,190,0.7)', 'rgba( 60,  0,120,0.3)'),
       // near-invisible dark smoke
       mist  : makeGlowTexture('rgba( 70,  0,110,0.3)', 'rgba( 30,  0, 60,0.08)', 256),
+      // soft neutral smoke sprite
+      smoke : makeGlowTexture('rgba(210,210,220,0.40)', 'rgba(120,120,140,0.12)', 192),
     };
 
     /* ─── Waterfall geometry constants ─── */
     const TOP_Y    =  10;   // source position
     const BOT_Y    = -10;   // floor position
     const H_RANGE  = TOP_Y - BOT_Y;
+    const IMPACT_Y = -8.7;  // barrier level where stream gets blocked and redirected
+    const SIDE_EXIT_X = 14; // reset once side-flow exits visible area
 
     // Radius of the flow at any height y (0 = top, 1 = bottom along t)
     function flowRadius(y, spreadMult) {
       const t = Math.max(0, Math.min(1, (TOP_Y - y) / H_RANGE));
       // accelerating spread — thin at source, fan out toward floor
-      const r = 0.18 + 3.8 * Math.pow(t, 0.65);
+      const r = 0.18 + 3.8 * Math.pow(t, 0.65) + 1.35 * Math.pow(t, 2.2);
       return r * spreadMult;
     }
 
@@ -75,6 +79,7 @@
     function buildSystem(count, cfg) {
       const pos   = new Float32Array(count * 3);
       const speed = new Float32Array(count);    // downward speed per frame
+      const side  = new Float32Array(count);    // side-flow momentum near impact zone
 
       for (let i = 0; i < count; i++) {
         const t = Math.random();                // 0=top … 1=bottom
@@ -91,6 +96,7 @@
 
         // speed: slow at top, faster at bottom, some randomness
         speed[i] = 0.025 + t * 0.09 + Math.random() * 0.03;
+        side[i] = 0;
       }
 
       const geo = new THREE.BufferGeometry();
@@ -108,7 +114,7 @@
       });
 
       const pts = new THREE.Points(geo, mat);
-      pts.userData = { speed, count, cfg };
+      pts.userData = { speed, side, count, cfg };
       return pts;
     }
 
@@ -154,6 +160,51 @@
 
     LAYERS.forEach(l => scene.add(l));
 
+    /* ─── Surrounding smoke layer ─── */
+    function buildSmokeSystem(count) {
+      const pos      = new Float32Array(count * 3);
+      const angle    = new Float32Array(count);
+      const radius   = new Float32Array(count);
+      const rise     = new Float32Array(count);
+      const swirl    = new Float32Array(count);
+      const wobble   = new Float32Array(count);
+
+      for (let i = 0; i < count; i++) {
+        const y = BOT_Y + Math.random() * (H_RANGE + 6);
+        angle[i]  = Math.random() * Math.PI * 2;
+        radius[i] = 1.2 + Math.random() * 4.3;
+        rise[i]   = 0.010 + Math.random() * 0.010;
+        swirl[i]  = 0.0035 + Math.random() * 0.005;
+        wobble[i] = Math.random() * Math.PI * 2;
+
+        const ix = i * 3;
+        pos[ix]     = Math.cos(angle[i]) * radius[i];
+        pos[ix + 1] = y;
+        pos[ix + 2] = Math.sin(angle[i]) * radius[i] * 0.45;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+      const mat = new THREE.PointsMaterial({
+        size: 0.95,
+        map: TEX.smoke,
+        color: new THREE.Color(0xc9c9d8),
+        transparent: true,
+        opacity: 0.24,
+        blending: THREE.NormalBlending,
+        depthWrite: false,
+        sizeAttenuation: true,
+      });
+
+      const smoke = new THREE.Points(geo, mat);
+      smoke.userData = { count, angle, radius, rise, swirl, wobble };
+      return smoke;
+    }
+
+    const SMOKE_LAYER = buildSmokeSystem(1400);
+    scene.add(SMOKE_LAYER);
+
     /* ─── Ambient purple rim light (subtle) ─── */
     const rimLight = new THREE.PointLight(0x9922ff, 1.6, 30);
     rimLight.position.set(0, -1, 4);
@@ -162,19 +213,29 @@
     /* ─── Particle update ─── */
     function updateLayer(sys) {
       const pos = sys.geometry.attributes.position.array;
-      const { speed, count, cfg } = sys.userData;
+      const { speed, side, count, cfg } = sys.userData;
 
       for (let i = 0; i < count; i++) {
         const ix = i * 3, iy = ix + 1, iz = ix + 2;
 
-        // fall
-        pos[iy] -= speed[i];
+        if (pos[iy] > IMPACT_Y) {
+          // free fall above the barrier
+          pos[iy] -= speed[i];
+          speed[i] += 0.00018;
+          side[i] *= 0.97;
+        } else {
+          // blocked at the bottom, then redirected to left/right side streams
+          pos[iy] = IMPACT_Y + (Math.random() - 0.5) * 0.20;
+          speed[i] *= 0.60;
 
-        // gentle gravity acceleration
-        speed[i] += 0.00018;
+          const dir = Math.abs(pos[ix]) < 0.08 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(pos[ix]);
+          side[i] = Math.min(side[i] + 0.0015 + cfg.spreadMult * 0.0011, 0.055);
+          pos[ix] += dir * (0.018 + side[i]);
+          pos[iz] += (Math.random() - 0.5) * 0.010;
+        }
 
-        // reset particle back to source when it leaves the bottom
-        if (pos[iy] < BOT_Y - 0.5) {
+        // reset particle back to source when side-stream exits the scene
+        if (Math.abs(pos[ix]) > SIDE_EXIT_X) {
           const R0    = flowRadius(TOP_Y, cfg.spreadMult);
           const angle = Math.random() * Math.PI * 2;
           const r     = Math.pow(Math.random(), cfg.radialBias) * R0;
@@ -184,6 +245,7 @@
           pos[iz] = Math.sin(angle) * r * 0.25;
 
           speed[i] = 0.025 + Math.random() * 0.025;
+          side[i] = 0;
         }
 
         // lateral spread force: nudge each particle outward in proportion to
@@ -194,10 +256,44 @@
         const curR = Math.sqrt(Rx * Rx + Rz * Rz) + 1e-6; // epsilon avoids div-by-zero at centre
         const tgtR = flowRadius(pos[iy], cfg.spreadMult);
 
-        if (curR < tgtR) {
+        if (curR < tgtR && pos[iy] > IMPACT_Y) {
           const f  = 0.0006 * t;
           pos[ix] += (Rx / curR) * f;
           pos[iz] += (Rz / curR) * f * 0.25; // re-squash z component
+        }
+      }
+
+      sys.geometry.attributes.position.needsUpdate = true;
+    }
+
+    function updateSmokeLayer(sys, time) {
+      const pos = sys.geometry.attributes.position.array;
+      const { count, angle, radius, rise, swirl, wobble } = sys.userData;
+
+      for (let i = 0; i < count; i++) {
+        const ix = i * 3, iy = ix + 1, iz = ix + 2;
+
+        pos[iy] += rise[i];
+        angle[i] += swirl[i];
+        wobble[i] += 0.014;
+
+        const streamInfluence = 0.20 + 0.18 * Math.sin(time * 1.4 + pos[iy] * 0.22 + wobble[i]);
+        const targetRadius = radius[i] + streamInfluence;
+
+        pos[ix] = Math.cos(angle[i]) * targetRadius;
+        pos[iz] = Math.sin(angle[i]) * targetRadius * 0.45;
+
+        // Small horizontal noise keeps smoke from looking like a perfect ring.
+        pos[ix] += Math.sin(time * 0.9 + wobble[i]) * 0.02;
+        pos[iz] += Math.cos(time * 0.8 + wobble[i]) * 0.015;
+
+        if (pos[iy] > TOP_Y + 5.5) {
+          pos[iy] = BOT_Y - 2.5 - Math.random() * 2.5;
+          angle[i] = Math.random() * Math.PI * 2;
+          radius[i] = 1.2 + Math.random() * 4.3;
+          rise[i] = 0.010 + Math.random() * 0.010;
+          swirl[i] = 0.0035 + Math.random() * 0.005;
+          wobble[i] = Math.random() * Math.PI * 2;
         }
       }
 
@@ -213,6 +309,7 @@
       elapsed += clock.getDelta();
 
       LAYERS.forEach(updateLayer);
+      updateSmokeLayer(SMOKE_LAYER, elapsed);
 
       // breathe the rim light intensity for a pulsing-glow feel
       rimLight.intensity = 1.4 + 0.6 * Math.sin(elapsed * 1.8);
