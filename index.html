@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Waterfall Light Effect – Three.js</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    /* ─── Scene / Camera / Renderer ─── */
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      200
+    );
+    camera.position.set(0, 0, 22);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    /* ─── Glow-sprite texture factory ─── */
+    function makeGlowTexture(centerRGBA, midRGBA, size) {
+      size = size || 128;
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      const h = size / 2;
+      const g = ctx.createRadialGradient(h, h, 0, h, h, h);
+      g.addColorStop(0.0, centerRGBA);
+      g.addColorStop(0.35, midRGBA);
+      g.addColorStop(1.0, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      return new THREE.CanvasTexture(c);
+    }
+
+    const TEX = {
+      // bright white-violet core
+      core  : makeGlowTexture('rgba(255,245,255,1.0)', 'rgba(230,170,255,0.7)'),
+      // medium violet inner ring
+      inner : makeGlowTexture('rgba(210,120,255,0.9)', 'rgba(140, 50,220,0.5)'),
+      // deep purple outer ring
+      outer : makeGlowTexture('rgba(110, 20,190,0.7)', 'rgba( 60,  0,120,0.3)'),
+      // near-invisible dark smoke
+      mist  : makeGlowTexture('rgba( 70,  0,110,0.3)', 'rgba( 30,  0, 60,0.08)', 256),
+    };
+
+    /* ─── Waterfall geometry constants ─── */
+    const TOP_Y    =  10;   // source position
+    const BOT_Y    = -10;   // floor position
+    const H_RANGE  = TOP_Y - BOT_Y;
+
+    // Radius of the flow at any height y (0 = top, 1 = bottom along t)
+    function flowRadius(y, spreadMult) {
+      const t = Math.max(0, Math.min(1, (TOP_Y - y) / H_RANGE));
+      // accelerating spread — thin at source, fan out toward floor
+      const r = 0.18 + 3.8 * Math.pow(t, 0.65);
+      return r * spreadMult;
+    }
+
+    /* ─── Generic particle-system builder ─── */
+    function buildSystem(count, cfg) {
+      const pos   = new Float32Array(count * 3);
+      const speed = new Float32Array(count);    // downward speed per frame
+
+      for (let i = 0; i < count; i++) {
+        const t = Math.random();                // 0=top … 1=bottom
+        const y = TOP_Y - t * H_RANGE;
+        const R = flowRadius(y, cfg.spreadMult);
+
+        const angle = Math.random() * Math.PI * 2;
+        // radialBias > 1 → crowd towards centre; < 1 → crowd towards edge
+        const r = Math.pow(Math.random(), cfg.radialBias) * R;
+
+        pos[i * 3    ] = Math.cos(angle) * r;
+        pos[i * 3 + 1] = y;
+        pos[i * 3 + 2] = Math.sin(angle) * r * 0.25; // depth: flatten into a ribbon
+
+        // speed: slow at top, faster at bottom, some randomness
+        speed[i] = 0.025 + t * 0.09 + Math.random() * 0.03;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+      const mat = new THREE.PointsMaterial({
+        size       : cfg.size,
+        map        : cfg.tex,
+        color      : cfg.color,
+        transparent: true,
+        opacity    : cfg.opacity,
+        blending   : THREE.AdditiveBlending,
+        depthWrite : false,
+        sizeAttenuation: true,
+      });
+
+      const pts = new THREE.Points(geo, mat);
+      pts.userData = { speed, count, cfg };
+      return pts;
+    }
+
+    /* ─── Four visual layers ─── */
+    const LAYERS = [
+      // mist – rendered first (background layer)
+      buildSystem(900, {
+        spreadMult: 1.9,
+        radialBias: 0.55,  // slightly edge-biased
+        size      : 1.5,
+        tex       : TEX.mist,
+        color     : new THREE.Color(0x440066),
+        opacity   : 0.22,
+      }),
+      // outer deep-purple ring
+      buildSystem(2800, {
+        spreadMult: 1.1,
+        radialBias: 0.9,
+        size      : 0.14,
+        tex       : TEX.outer,
+        color     : new THREE.Color(0x7700bb),
+        opacity   : 0.55,
+      }),
+      // inner violet ring
+      buildSystem(2200, {
+        spreadMult: 0.60,
+        radialBias: 1.4,
+        size      : 0.17,
+        tex       : TEX.inner,
+        color     : new THREE.Color(0xcc55ff),
+        opacity   : 0.70,
+      }),
+      // core bright-white/violet column
+      buildSystem(1400, {
+        spreadMult: 0.28,
+        radialBias: 4.0,   // tightly centred
+        size      : 0.22,
+        tex       : TEX.core,
+        color     : new THREE.Color(0xffffff),
+        opacity   : 0.90,
+      }),
+    ];
+
+    LAYERS.forEach(l => scene.add(l));
+
+    /* ─── Ambient purple rim light (subtle) ─── */
+    const rimLight = new THREE.PointLight(0x9922ff, 1.6, 30);
+    rimLight.position.set(0, -1, 4);
+    scene.add(rimLight);
+
+    /* ─── Particle update ─── */
+    function updateLayer(sys) {
+      const pos = sys.geometry.attributes.position.array;
+      const { speed, count, cfg } = sys.userData;
+
+      for (let i = 0; i < count; i++) {
+        const ix = i * 3, iy = ix + 1, iz = ix + 2;
+
+        // fall
+        pos[iy] -= speed[i];
+
+        // gentle gravity acceleration
+        speed[i] += 0.00018;
+
+        // reset particle back to source when it leaves the bottom
+        if (pos[iy] < BOT_Y - 0.5) {
+          const R0    = flowRadius(TOP_Y, cfg.spreadMult);
+          const angle = Math.random() * Math.PI * 2;
+          const r     = Math.pow(Math.random(), cfg.radialBias) * R0;
+
+          pos[ix] = Math.cos(angle) * r;
+          pos[iy] = TOP_Y + Math.random() * 2.0; // stagger re-entry
+          pos[iz] = Math.sin(angle) * r * 0.25;
+
+          speed[i] = 0.025 + Math.random() * 0.025;
+        }
+
+        // lateral spread force: nudge each particle outward in proportion to
+        // how far down it has fallen, so the stream fans out naturally
+        const t  = Math.max(0, (TOP_Y - pos[iy]) / H_RANGE);
+        const Rx = pos[ix];
+        const Rz = pos[iz] / 0.25;           // un-squash z for force calc
+        const curR = Math.sqrt(Rx * Rx + Rz * Rz) + 1e-6; // epsilon avoids div-by-zero at centre
+        const tgtR = flowRadius(pos[iy], cfg.spreadMult);
+
+        if (curR < tgtR) {
+          const f  = 0.0006 * t;
+          pos[ix] += (Rx / curR) * f;
+          pos[iz] += (Rz / curR) * f * 0.25; // re-squash z component
+        }
+      }
+
+      sys.geometry.attributes.position.needsUpdate = true;
+    }
+
+    /* ─── Animation loop ─── */
+    const clock = new THREE.Clock();
+    let elapsed = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      elapsed += clock.getDelta();
+
+      LAYERS.forEach(updateLayer);
+
+      // breathe the rim light intensity for a pulsing-glow feel
+      rimLight.intensity = 1.4 + 0.6 * Math.sin(elapsed * 1.8);
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    /* ─── Responsive resize ─── */
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
