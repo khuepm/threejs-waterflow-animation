@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Waterfall Light Animation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    // ─── Scene & Renderer ─────────────────────────────────────────────────────
+    const scene    = new THREE.Scene();
+    const camera   = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1000);
+    camera.position.set(0, 1, 18);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setClearColor(0x000000);
+    document.body.appendChild(renderer.domElement);
+
+    // ─── Waterfall Bounds ─────────────────────────────────────────────────────
+    const TOP = 9, BOT = -9, FALL = TOP - BOT;
+
+    // ─── Soft Circular Particle Texture ───────────────────────────────────────
+    function softCircle(r, g, b, res = 128) {
+      const cv  = document.createElement('canvas');
+      cv.width  = cv.height = res;
+      const ctx = cv.getContext('2d');
+      const gr  = ctx.createRadialGradient(res / 2, res / 2, 0, res / 2, res / 2, res / 2);
+      gr.addColorStop(0.0, `rgba(${r},${g},${b},1.0)`);
+      gr.addColorStop(0.4, `rgba(${r},${g},${b},0.6)`);
+      gr.addColorStop(0.8, `rgba(${r},${g},${b},0.2)`);
+      gr.addColorStop(1.0, `rgba(${r},${g},${b},0.0)`);
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, res, res);
+      return new THREE.CanvasTexture(cv);
+    }
+
+    // ─── Layer Definitions ────────────────────────────────────────────────────
+    // topR / botR : radial spread at top / bottom (world units)
+    // spd / sV   : base fall speed / speed variance
+    // drift      : radial outward drift speed
+    // sz         : PointsMaterial particle size
+    // op         : base opacity
+    // col        : [R, G, B] used for the particle texture
+    // zS         : Z-axis scale (flatten depth for inner layers)
+    const LAYERS = [
+      // 1. Core – near-white / bright violet  (innermost, fastest)
+      { n: 1500, topR: 0.05, botR: 0.22, spd: 9.5, sV: 2.0, drift: 0.07, sz: 0.05, op: 1.00, col: [240, 220, 255], zS: 0.20 },
+      // 2. Inner glow – bright violet
+      { n: 2500, topR: 0.12, botR: 0.55, spd: 8.5, sV: 2.0, drift: 0.14, sz: 0.09, op: 0.85, col: [190, 120, 255], zS: 0.30 },
+      // 3. Body – medium purple
+      { n: 2500, topR: 0.28, botR: 1.10, spd: 7.5, sV: 2.0, drift: 0.24, sz: 0.13, op: 0.70, col: [140,  70, 240], zS: 0.45 },
+      // 4. Outer – dark purple
+      { n: 2000, topR: 0.50, botR: 1.90, spd: 6.0, sV: 2.0, drift: 0.37, sz: 0.17, op: 0.55, col: [ 90,  25, 190], zS: 0.55 },
+      // 5. Mist – large, transparent
+      { n: 1200, topR: 0.90, botR: 3.20, spd: 4.0, sV: 1.5, drift: 0.65, sz: 0.45, op: 0.18, col: [110,  50, 180], zS: 0.70 },
+      // 6. Ambient – very large, very transparent
+      { n:  700, topR: 1.50, botR: 4.50, spd: 2.5, sV: 1.0, drift: 0.90, sz: 0.90, op: 0.10, col: [ 90,  40, 160], zS: 0.85 },
+    ];
+
+    // ─── Build Particle Systems ───────────────────────────────────────────────
+    const systems = LAYERS.map(L => {
+      const n   = L.n;
+      const pos = new Float32Array(n * 3);
+      const vy  = new Float32Array(n);   // downward velocity per particle
+      const rdv = new Float32Array(n);   // radial outward drift speed
+
+      for (let i = 0; i < n; i++) {
+        const t    = Math.random();                          // 0 = top … 1 = bottom
+        const y    = TOP - t * FALL;
+        const maxR = L.topR + t * (L.botR - L.topR);
+        const ang  = Math.random() * Math.PI * 2;
+        const r    = Math.sqrt(Math.random()) * maxR;        // uniform-area distribution
+
+        pos[i * 3]     = Math.cos(ang) * r;
+        pos[i * 3 + 1] = y;
+        pos[i * 3 + 2] = Math.sin(ang) * r * L.zS;
+
+        vy[i]  = -(L.spd + Math.random() * L.sV);
+        rdv[i] = L.drift * (0.5 + Math.random() * 0.5);
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+      const mat = new THREE.PointsMaterial({
+        size           : L.sz,
+        map            : softCircle(...L.col),
+        transparent    : true,
+        opacity        : L.op,
+        blending       : THREE.AdditiveBlending,
+        depthWrite     : false,
+        sizeAttenuation: true,
+      });
+
+      const pts = new THREE.Points(geo, mat);
+      scene.add(pts);
+      return { pts, pos, vy, rdv, L, n };
+    });
+
+    // ─── Central Glow Trapezoid (narrow top → wide bottom) ────────────────────
+    (function addGlowPlane() {
+      const tW = 0.6, bW = 5.0;
+      const geo = new THREE.BufferGeometry();
+
+      geo.setIndex(new THREE.BufferAttribute(new Uint16Array([0, 2, 1, 1, 2, 3]), 1));
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+        -tW / 2, TOP, -0.1,    tW / 2, TOP, -0.1,
+        -bW / 2, BOT, -0.1,    bW / 2, BOT, -0.1,
+      ]), 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([
+        0, 1,  1, 1,
+        0, 0,  1, 0,
+      ]), 2));
+      geo.computeBoundingSphere();
+
+      // Horizontal gradient: bright center → transparent edges
+      const cv  = document.createElement('canvas'); cv.width = 256; cv.height = 2;
+      const ctx = cv.getContext('2d');
+      const gr  = ctx.createLinearGradient(0, 0, 256, 0);
+      gr.addColorStop(0.00, 'rgba(0,0,0,0)');
+      gr.addColorStop(0.25, 'rgba(80,20,180,0.15)');
+      gr.addColorStop(0.50, 'rgba(180,120,255,0.45)');
+      gr.addColorStop(0.75, 'rgba(80,20,180,0.15)');
+      gr.addColorStop(1.00, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, 256, 2);
+
+      const mat = new THREE.MeshBasicMaterial({
+        map       : new THREE.CanvasTexture(cv),
+        transparent: true,
+        blending  : THREE.AdditiveBlending,
+        depthWrite: false,
+        side      : THREE.DoubleSide,
+      });
+      scene.add(new THREE.Mesh(geo, mat));
+    })();
+
+    // ─── Source Glow Sprite (bright origin at the top) ───────────────────────
+    (function addSourceGlow() {
+      const cv  = document.createElement('canvas'); cv.width = cv.height = 256;
+      const ctx = cv.getContext('2d');
+      const gr  = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      gr.addColorStop(0.0, 'rgba(255,245,255,0.95)');
+      gr.addColorStop(0.3, 'rgba(200,140,255,0.55)');
+      gr.addColorStop(0.7, 'rgba(100,40,200,0.20)');
+      gr.addColorStop(1.0, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, 256, 256);
+
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map     : new THREE.CanvasTexture(cv),
+        blending: THREE.AdditiveBlending,
+      }));
+      sp.scale.set(2.5, 2.5, 1);
+      sp.position.set(0, TOP, 0);
+      scene.add(sp);
+    })();
+
+    // ─── Bottom Splash / Impact Glow ─────────────────────────────────────────
+    let splashSprite;
+    (function addBottomGlow() {
+      const cv  = document.createElement('canvas'); cv.width = cv.height = 256;
+      const ctx = cv.getContext('2d');
+      const gr  = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      gr.addColorStop(0.0, 'rgba(160,100,255,0.35)');
+      gr.addColorStop(0.5, 'rgba(80,30,180,0.15)');
+      gr.addColorStop(1.0, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, 256, 256);
+
+      splashSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map     : new THREE.CanvasTexture(cv),
+        blending: THREE.AdditiveBlending,
+        opacity : 0.5,
+      }));
+      splashSprite.scale.set(10, 3, 1);
+      splashSprite.position.set(0, BOT + 0.5, 0);
+      scene.add(splashSprite);
+    })();
+
+    // ─── Animation Loop ───────────────────────────────────────────────────────
+    const clock = new THREE.Clock();
+
+    (function animate() {
+      requestAnimationFrame(animate);
+      const dt      = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.getElapsedTime();
+
+      systems.forEach(({ pos, vy, rdv, L, n, pts }) => {
+        for (let i = 0; i < n; i++) {
+          const i3 = i * 3;
+
+          // Fall downward
+          pos[i3 + 1] += vy[i] * dt;
+
+          // Radial drift (particles spread outward as they fall)
+          const px = pos[i3], pz = pos[i3 + 2];
+          const d  = Math.sqrt(px * px + pz * pz);
+          if (d > 0.001) {
+            const rv = rdv[i] * dt;
+            pos[i3]     += (px / d) * rv;
+            pos[i3 + 2] += (pz / d) * rv;
+          }
+
+          // Subtle sinusoidal sway for organic look
+          pos[i3] += Math.sin(elapsed * 1.8 + i * 0.13) * 0.0025;
+
+          // Reset particle to top when it reaches the bottom
+          if (pos[i3 + 1] < BOT) {
+            const ang   = Math.random() * Math.PI * 2;
+            const r     = Math.sqrt(Math.random()) * L.topR;
+            pos[i3]     = Math.cos(ang) * r;
+            pos[i3 + 1] = TOP + Math.random() * 0.8;
+            pos[i3 + 2] = Math.sin(ang) * r * L.zS;
+            vy[i]  = -(L.spd + Math.random() * L.sV);
+            rdv[i] = L.drift * (0.5 + Math.random() * 0.5);
+          }
+        }
+        pts.geometry.attributes.position.needsUpdate = true;
+      });
+
+      // Pulse the bottom impact glow
+      if (splashSprite) {
+        splashSprite.material.opacity = 0.35 + Math.sin(elapsed * 2.8) * 0.15;
+      }
+
+      renderer.render(scene, camera);
+    })();
+
+    // ─── Resize ───────────────────────────────────────────────────────────────
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
