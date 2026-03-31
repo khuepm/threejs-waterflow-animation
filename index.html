@@ -102,7 +102,7 @@
           }
         `,
         transparent: true,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
       }));
@@ -156,20 +156,20 @@
       const streamHeight = TOP_Y - IMPACT_Y + 0.6;
 
       const outer = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.80, 1.38, streamHeight, 42, 1, true),
-        createStreamMaterial(0x5910a0, 0x8828ff, 1.25, 0.42)
+        new THREE.CylinderGeometry(0.80, 1.38, streamHeight, 30, 1, true),
+        createStreamMaterial(0x4e2785, 0x7a54b2, 0.72, 0.68)
       );
       outer.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
       const inner = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.42, 0.86, streamHeight, 34, 1, true),
-        createStreamMaterial(0x8f39ff, 0xffd9ff, 1.5, 0.62)
+        new THREE.CylinderGeometry(0.42, 0.86, streamHeight, 24, 1, true),
+        createStreamMaterial(0x7d4ac8, 0xd6c3ef, 0.82, 0.76)
       );
       inner.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
       const core = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.20, 0.50, streamHeight, 28, 1, true),
-        createStreamMaterial(0xc07aff, 0xffffff, 1.8, 0.82)
+        new THREE.CylinderGeometry(0.20, 0.50, streamHeight, 20, 1, true),
+        createStreamMaterial(0x9c7ec7, 0xf3ecff, 0.96, 0.86)
       );
       core.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
@@ -186,32 +186,6 @@
       topHalo.position.set(0, TOP_Y + 0.65, 0);
       topHalo.scale.set(3.2, 3.2, 1);
 
-      const impactHalo = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          map: haloTexture,
-          color: 0xdca6ff,
-          transparent: true,
-          opacity: 0.95,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        })
-      );
-      impactHalo.position.set(0, IMPACT_Y - 0.35, 0);
-      impactHalo.scale.set(4.8, 2.1, 1);
-
-      const leftSpill = new THREE.Mesh(
-        new THREE.PlaneGeometry(7.8, 1.9, 1, 1),
-        createSideMaterial(0xc56fff, 0xffffff, 0.74)
-      );
-      leftSpill.position.set(-3.8, IMPACT_Y - 0.34, 0);
-      leftSpill.rotation.y = Math.PI;
-
-      const rightSpill = new THREE.Mesh(
-        new THREE.PlaneGeometry(7.8, 1.9, 1, 1),
-        createSideMaterial(0xc56fff, 0xffffff, 0.74)
-      );
-      rightSpill.position.set(3.8, IMPACT_Y - 0.34, 0);
-
       const fogAura = new THREE.Mesh(
         new THREE.SphereGeometry(2.9, 24, 16),
         new THREE.MeshBasicMaterial({
@@ -224,8 +198,8 @@
       );
       fogAura.position.set(0, 0.2, 0);
 
-      group.add(outer, inner, core, topHalo, impactHalo, leftSpill, rightSpill, fogAura);
-      group.userData = { outer, inner, core, topHalo, impactHalo, fogAura };
+      group.add(outer, inner, core, topHalo, fogAura);
+      group.userData = { outer, inner, core, topHalo, fogAura };
       return group;
     }
 
@@ -306,7 +280,7 @@
     streamGroups.push(mainStream);
     scene.add(mainStream);
 
-    const smokeLayer = buildSmokeLayer(3200, STREAM_CENTER_X);
+    const smokeLayer = buildSmokeLayer(1900, STREAM_CENTER_X);
     scene.add(smokeLayer);
 
     const rimLight = new THREE.PointLight(0xa547ff, 2.1, 40);
@@ -342,8 +316,7 @@
         p.outer.scale.z = 1.0 + 0.05 * Math.cos(phase * 0.55);
 
         p.topHalo.material.opacity = 0.70 + 0.25 * (0.5 + 0.5 * Math.sin(elapsed * 2.6 + i));
-        p.impactHalo.material.opacity = 0.82 + 0.16 * (0.5 + 0.5 * Math.sin(elapsed * 3.1 + i * 0.7));
-        p.fogAura.material.opacity = 0.08 + 0.05 * (0.5 + 0.5 * Math.sin(elapsed * 1.8 + i));
+        p.fogAura.material.opacity = 0.07 + 0.04 * (0.5 + 0.5 * Math.sin(elapsed * 1.8 + i));
       }
 
       updateSmokeLayer(smokeLayer, elapsed);
