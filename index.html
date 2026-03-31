@@ -8,21 +8,191 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; }
     canvas { display: block; }
+    .panel {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
+      overflow: auto;
+      background: rgba(12, 12, 18, 0.84);
+      border: 1px solid rgba(210, 210, 255, 0.18);
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      color: #ececf7;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      padding: 12px;
+      z-index: 10;
+    }
+    .panel h2 {
+      font-size: 14px;
+      letter-spacing: 0.4px;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .group {
+      margin-bottom: 12px;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+    }
+    .group h3 {
+      font-size: 12px;
+      margin-bottom: 8px;
+      color: #d7d7ff;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 88px;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .row label {
+      font-size: 11px;
+      opacity: 0.95;
+    }
+    .value {
+      text-align: right;
+      font-size: 11px;
+      color: #cfd0ea;
+    }
+    .input {
+      width: 100%;
+      accent-color: #b18eff;
+    }
+    .color-input {
+      width: 100%;
+      height: 26px;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      padding: 0;
+    }
+    .json-wrap {
+      display: grid;
+      gap: 8px;
+    }
+    .json-box {
+      width: 100%;
+      min-height: 170px;
+      resize: vertical;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.17);
+      background: rgba(2, 2, 7, 0.76);
+      color: #f3f3ff;
+      padding: 8px;
+      font-size: 12px;
+      line-height: 1.35;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .btn-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .btn {
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.05);
+      color: #f2f2ff;
+      border-radius: 8px;
+      padding: 7px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.11); }
+    .status {
+      min-height: 16px;
+      font-size: 11px;
+      color: #c2ffd9;
+    }
   </style>
 </head>
 <body>
+  <aside class="panel" id="controlPanel">
+    <h2>Waterflow Config</h2>
+    <div class="group" id="lightGroup">
+      <h3>Light Column</h3>
+    </div>
+    <div class="group" id="smokeGroup">
+      <h3>Smoke</h3>
+    </div>
+    <div class="group json-wrap">
+      <h3>Config JSON</h3>
+      <textarea id="configJson" class="json-box"></textarea>
+      <div class="btn-row">
+        <button class="btn" id="copyJsonBtn">Copy JSON</button>
+        <button class="btn" id="applyJsonBtn">Apply JSON</button>
+        <button class="btn" id="resetBtn">Reset</button>
+      </div>
+      <div class="status" id="statusText"></div>
+    </div>
+  </aside>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
-    /* ─── Scene / Camera / Renderer ─── */
+    const TOP_Y = 9.8;
+    const IMPACT_Y = -8.7;
+    const STREAM_CENTER_X = 0;
+
+    const DEFAULT_CONFIG = {
+      light: {
+        outerTopRadius: 0.8,
+        outerBottomRadius: 1.38,
+        innerTopRadius: 0.42,
+        innerBottomRadius: 0.86,
+        coreTopRadius: 0.2,
+        coreBottomRadius: 0.5,
+        outerIntensity: 0.72,
+        innerIntensity: 0.82,
+        coreIntensity: 0.96,
+        outerAlpha: 0.68,
+        innerAlpha: 0.76,
+        coreAlpha: 0.86,
+        pulseOuter: 0.05,
+        pulseInner: 0.08,
+        pulseCore: 0.1,
+        zMotion: 0.06,
+        haloOpacity: 0.85,
+        colorOuterA: 0x4e2785,
+        colorOuterB: 0x7a54b2,
+        colorInnerA: 0x7d4ac8,
+        colorInnerB: 0xd6c3ef,
+        colorCoreA: 0x9c7ec7,
+        colorCoreB: 0xf3ecff,
+      },
+      smoke: {
+        count: 1900,
+        size: 1.15,
+        opacity: 0.37,
+        baseRadius: 0.9,
+        randomRadius: 2.9,
+        riseMin: 0.006,
+        riseMax: 0.01,
+        swirlMin: 0.006,
+        swirlMax: 0.013,
+        spreadByHeight: 2.2,
+        noiseX: 0.05,
+        noiseZ: 0.04,
+        noiseSpread: 0.22,
+        spawnBelow: 2.6,
+        spawnRange: 8.6,
+        resetTop: 6.2,
+        resetBelow: 2.8,
+        color: 0xd0d0e0,
+      },
+    };
+
+    function deepClone(obj) {
+      return JSON.parse(JSON.stringify(obj));
+    }
+
+    const CONFIG = deepClone(DEFAULT_CONFIG);
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x020206);
 
-    const camera = new THREE.PerspectiveCamera(
-      58,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      200
-    );
+    const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 200);
     camera.position.set(0, -0.4, 24);
     camera.lookAt(0, -0.8, 0);
 
@@ -31,13 +201,9 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     document.body.appendChild(renderer.domElement);
 
-    /* ─── Core constants ─── */
-    const TOP_Y = 9.8;
-    const IMPACT_Y = -8.7;
-    const STREAM_CENTER_X = 0;
-
     const animatedMaterials = [];
-    const streamGroups = [];
+    let mainStream = null;
+    let smokeLayer = null;
 
     function registerAnimatedMaterial(mat) {
       animatedMaterials.push(mat);
@@ -61,6 +227,14 @@
 
     const haloTexture = makeGlowTexture('rgba(255,240,255,1.0)', 'rgba(170,120,255,0.42)', 256);
     const smokeTexture = makeGlowTexture('rgba(235,235,245,0.38)', 'rgba(140,140,170,0.14)', 192);
+
+    function colorToCss(hexNumber) {
+      return '#' + (hexNumber >>> 0).toString(16).padStart(6, '0');
+    }
+
+    function cssToColor(css) {
+      return parseInt(css.replace('#', ''), 16);
+    }
 
     function createStreamMaterial(colorA, colorB, intensity, alpha) {
       return registerAnimatedMaterial(new THREE.ShaderMaterial({
@@ -108,47 +282,6 @@
       }));
     }
 
-    function createSideMaterial(colorA, colorB, alpha) {
-      return registerAnimatedMaterial(new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-          uColorA: { value: new THREE.Color(colorA) },
-          uColorB: { value: new THREE.Color(colorB) },
-          uAlpha: { value: alpha },
-        },
-        vertexShader: `
-          varying vec2 vUv;
-          void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-          uniform float uAlpha;
-          varying vec2 vUv;
-
-          void main() {
-            float x = vUv.x;
-            float edgeY = smoothstep(0.0, 0.22, vUv.y) * (1.0 - smoothstep(0.78, 1.0, vUv.y));
-            float body = smoothstep(0.0, 0.10, x) * (1.0 - smoothstep(0.74, 1.0, x));
-            float streak = 0.5 + 0.5 * sin(30.0 * x - 8.0 * uTime + vUv.y * 10.0);
-            float alpha = uAlpha * edgeY * body * (0.32 + 0.68 * streak);
-
-            vec3 col = mix(uColorA, uColorB, x);
-            col *= 1.2 + 0.8 * streak;
-            gl_FragColor = vec4(col, alpha);
-          }
-        `,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }));
-    }
-
     function buildLightStream(centerX) {
       const group = new THREE.Group();
       group.position.x = centerX;
@@ -156,20 +289,20 @@
       const streamHeight = TOP_Y - IMPACT_Y + 0.6;
 
       const outer = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.80, 1.38, streamHeight, 30, 1, true),
-        createStreamMaterial(0x4e2785, 0x7a54b2, 0.72, 0.68)
+        new THREE.CylinderGeometry(CONFIG.light.outerTopRadius, CONFIG.light.outerBottomRadius, streamHeight, 30, 1, true),
+        createStreamMaterial(CONFIG.light.colorOuterA, CONFIG.light.colorOuterB, CONFIG.light.outerIntensity, CONFIG.light.outerAlpha)
       );
       outer.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
       const inner = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.42, 0.86, streamHeight, 24, 1, true),
-        createStreamMaterial(0x7d4ac8, 0xd6c3ef, 0.82, 0.76)
+        new THREE.CylinderGeometry(CONFIG.light.innerTopRadius, CONFIG.light.innerBottomRadius, streamHeight, 24, 1, true),
+        createStreamMaterial(CONFIG.light.colorInnerA, CONFIG.light.colorInnerB, CONFIG.light.innerIntensity, CONFIG.light.innerAlpha)
       );
       inner.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
       const core = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.20, 0.50, streamHeight, 20, 1, true),
-        createStreamMaterial(0x9c7ec7, 0xf3ecff, 0.96, 0.86)
+        new THREE.CylinderGeometry(CONFIG.light.coreTopRadius, CONFIG.light.coreBottomRadius, streamHeight, 20, 1, true),
+        createStreamMaterial(CONFIG.light.colorCoreA, CONFIG.light.colorCoreB, CONFIG.light.coreIntensity, CONFIG.light.coreAlpha)
       );
       core.position.y = (TOP_Y + IMPACT_Y) * 0.5;
 
@@ -178,7 +311,7 @@
           map: haloTexture,
           color: 0xe6beff,
           transparent: true,
-          opacity: 0.85,
+          opacity: CONFIG.light.haloOpacity,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
         })
@@ -191,6 +324,10 @@
       return group;
     }
 
+    function randomIn(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
     function buildSmokeLayer(count, centerX) {
       const pos = new Float32Array(count * 3);
       const angle = new Float32Array(count);
@@ -201,11 +338,11 @@
 
       for (let i = 0; i < count; i++) {
         const ix = i * 3;
-        const y = IMPACT_Y - 2.6 + Math.random() * (TOP_Y - IMPACT_Y + 8.6);
+        const y = IMPACT_Y - CONFIG.smoke.spawnBelow + Math.random() * (TOP_Y - IMPACT_Y + CONFIG.smoke.spawnRange);
         angle[i] = Math.random() * Math.PI * 2;
-        radius[i] = 0.9 + Math.random() * 2.9;
-        rise[i] = 0.006 + Math.random() * 0.010;
-        swirl[i] = 0.006 + Math.random() * 0.007;
+        radius[i] = CONFIG.smoke.baseRadius + Math.random() * CONFIG.smoke.randomRadius;
+        rise[i] = randomIn(CONFIG.smoke.riseMin, CONFIG.smoke.riseMax);
+        swirl[i] = randomIn(CONFIG.smoke.swirlMin, CONFIG.smoke.swirlMax);
         drift[i] = Math.random() * Math.PI * 2;
 
         pos[ix] = centerX + Math.cos(angle[i]) * radius[i];
@@ -217,11 +354,11 @@
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 
       const mat = new THREE.PointsMaterial({
-        size: 1.15,
+        size: CONFIG.smoke.size,
         map: smokeTexture,
-        color: new THREE.Color(0xd0d0e0),
+        color: new THREE.Color(CONFIG.smoke.color),
         transparent: true,
-        opacity: 0.37,
+        opacity: CONFIG.smoke.opacity,
         blending: THREE.NormalBlending,
         depthWrite: false,
         sizeAttenuation: true,
@@ -231,6 +368,72 @@
       points.userData = { count, angle, radius, rise, swirl, drift, centerX };
       return points;
     }
+
+    function rebuildSmokeLayer() {
+      if (smokeLayer) {
+        scene.remove(smokeLayer);
+        smokeLayer.geometry.dispose();
+        smokeLayer.material.dispose();
+      }
+      smokeLayer = buildSmokeLayer(Math.round(CONFIG.smoke.count), STREAM_CENTER_X);
+      scene.add(smokeLayer);
+    }
+
+    function rebuildLightGeometry() {
+      if (!mainStream) return;
+      const p = mainStream.userData;
+      const streamHeight = TOP_Y - IMPACT_Y + 0.6;
+
+      p.outer.geometry.dispose();
+      p.inner.geometry.dispose();
+      p.core.geometry.dispose();
+
+      p.outer.geometry = new THREE.CylinderGeometry(CONFIG.light.outerTopRadius, CONFIG.light.outerBottomRadius, streamHeight, 30, 1, true);
+      p.inner.geometry = new THREE.CylinderGeometry(CONFIG.light.innerTopRadius, CONFIG.light.innerBottomRadius, streamHeight, 24, 1, true);
+      p.core.geometry = new THREE.CylinderGeometry(CONFIG.light.coreTopRadius, CONFIG.light.coreBottomRadius, streamHeight, 20, 1, true);
+    }
+
+    function applyLightMaterialConfig() {
+      if (!mainStream) return;
+      const p = mainStream.userData;
+
+      p.outer.material.uniforms.uIntensity.value = CONFIG.light.outerIntensity;
+      p.inner.material.uniforms.uIntensity.value = CONFIG.light.innerIntensity;
+      p.core.material.uniforms.uIntensity.value = CONFIG.light.coreIntensity;
+
+      p.outer.material.uniforms.uAlpha.value = CONFIG.light.outerAlpha;
+      p.inner.material.uniforms.uAlpha.value = CONFIG.light.innerAlpha;
+      p.core.material.uniforms.uAlpha.value = CONFIG.light.coreAlpha;
+
+      p.outer.material.uniforms.uColorA.value.setHex(CONFIG.light.colorOuterA);
+      p.outer.material.uniforms.uColorB.value.setHex(CONFIG.light.colorOuterB);
+      p.inner.material.uniforms.uColorA.value.setHex(CONFIG.light.colorInnerA);
+      p.inner.material.uniforms.uColorB.value.setHex(CONFIG.light.colorInnerB);
+      p.core.material.uniforms.uColorA.value.setHex(CONFIG.light.colorCoreA);
+      p.core.material.uniforms.uColorB.value.setHex(CONFIG.light.colorCoreB);
+
+      p.topHalo.material.opacity = CONFIG.light.haloOpacity;
+    }
+
+    function applySmokeMaterialConfig() {
+      if (!smokeLayer) return;
+      smokeLayer.material.size = CONFIG.smoke.size;
+      smokeLayer.material.opacity = CONFIG.smoke.opacity;
+      smokeLayer.material.color.setHex(CONFIG.smoke.color);
+      smokeLayer.material.needsUpdate = true;
+    }
+
+    mainStream = buildLightStream(STREAM_CENTER_X);
+    scene.add(mainStream);
+    rebuildSmokeLayer();
+
+    const rimLight = new THREE.PointLight(0xa547ff, 2.1, 40);
+    rimLight.position.set(0, -0.4, 5);
+    scene.add(rimLight);
+
+    const topLight = new THREE.PointLight(0xf2ccff, 1.2, 24);
+    topLight.position.set(0, TOP_Y + 1.5, 3);
+    scene.add(topLight);
 
     function updateSmokeLayer(layer, time) {
       const pos = layer.geometry.attributes.position.array;
@@ -246,17 +449,17 @@
         drift[i] += 0.012;
 
         const yNorm = Math.max(0, Math.min(1, (pos[iy] - IMPACT_Y) / (TOP_Y - IMPACT_Y + 3.6)));
-        const spread = radius[i] + yNorm * 2.2 + 0.22 * Math.sin(time * 1.7 + drift[i]);
+        const spread = radius[i] + yNorm * CONFIG.smoke.spreadByHeight + CONFIG.smoke.noiseSpread * Math.sin(time * 1.7 + drift[i]);
 
-        pos[ix] = centerX + Math.cos(angle[i]) * spread + Math.sin(time * 0.8 + drift[i]) * 0.05;
-        pos[iz] = Math.sin(angle[i]) * spread * 0.52 + Math.cos(time * 0.7 + drift[i]) * 0.04;
+        pos[ix] = centerX + Math.cos(angle[i]) * spread + Math.sin(time * 0.8 + drift[i]) * CONFIG.smoke.noiseX;
+        pos[iz] = Math.sin(angle[i]) * spread * 0.52 + Math.cos(time * 0.7 + drift[i]) * CONFIG.smoke.noiseZ;
 
-        if (pos[iy] > TOP_Y + 6.2) {
-          pos[iy] = IMPACT_Y - 2.8 - Math.random() * 2.2;
+        if (pos[iy] > TOP_Y + CONFIG.smoke.resetTop) {
+          pos[iy] = IMPACT_Y - CONFIG.smoke.resetBelow - Math.random() * 2.2;
           angle[i] = Math.random() * Math.PI * 2;
-          radius[i] = 0.9 + Math.random() * 2.9;
-          rise[i] = 0.006 + Math.random() * 0.010;
-          swirl[i] = 0.006 + Math.random() * 0.007;
+          radius[i] = CONFIG.smoke.baseRadius + Math.random() * CONFIG.smoke.randomRadius;
+          rise[i] = randomIn(CONFIG.smoke.riseMin, CONFIG.smoke.riseMax);
+          swirl[i] = randomIn(CONFIG.smoke.swirlMin, CONFIG.smoke.swirlMax);
           drift[i] = Math.random() * Math.PI * 2;
         }
       }
@@ -264,20 +467,216 @@
       layer.geometry.attributes.position.needsUpdate = true;
     }
 
-    const mainStream = buildLightStream(STREAM_CENTER_X);
-    streamGroups.push(mainStream);
-    scene.add(mainStream);
+    const controlMap = {};
+    const jsonArea = document.getElementById('configJson');
+    const statusText = document.getElementById('statusText');
 
-    const smokeLayer = buildSmokeLayer(1900, STREAM_CENTER_X);
-    scene.add(smokeLayer);
+    const LIGHT_CONTROLS = [
+      { key: 'outerTopRadius', label: 'Outer Top Radius', min: 0.2, max: 2.0, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'outerBottomRadius', label: 'Outer Bottom Radius', min: 0.3, max: 2.8, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'innerTopRadius', label: 'Inner Top Radius', min: 0.1, max: 1.2, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'innerBottomRadius', label: 'Inner Bottom Radius', min: 0.2, max: 1.8, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'coreTopRadius', label: 'Core Top Radius', min: 0.06, max: 0.8, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'coreBottomRadius', label: 'Core Bottom Radius', min: 0.1, max: 1.2, step: 0.01, rebuild: 'lightGeo' },
+      { key: 'outerIntensity', label: 'Outer Intensity', min: 0.1, max: 2.0, step: 0.01 },
+      { key: 'innerIntensity', label: 'Inner Intensity', min: 0.1, max: 2.0, step: 0.01 },
+      { key: 'coreIntensity', label: 'Core Intensity', min: 0.1, max: 2.2, step: 0.01 },
+      { key: 'outerAlpha', label: 'Outer Alpha', min: 0.1, max: 1.0, step: 0.01 },
+      { key: 'innerAlpha', label: 'Inner Alpha', min: 0.1, max: 1.0, step: 0.01 },
+      { key: 'coreAlpha', label: 'Core Alpha', min: 0.1, max: 1.0, step: 0.01 },
+      { key: 'pulseOuter', label: 'Outer Pulse', min: 0.0, max: 0.4, step: 0.005 },
+      { key: 'pulseInner', label: 'Inner Pulse', min: 0.0, max: 0.4, step: 0.005 },
+      { key: 'pulseCore', label: 'Core Pulse', min: 0.0, max: 0.4, step: 0.005 },
+      { key: 'zMotion', label: 'Depth Motion', min: 0.0, max: 0.4, step: 0.005 },
+      { key: 'haloOpacity', label: 'Top Halo Opacity', min: 0.0, max: 1.0, step: 0.01 },
+      { key: 'colorOuterA', label: 'Color Outer A', type: 'color' },
+      { key: 'colorOuterB', label: 'Color Outer B', type: 'color' },
+      { key: 'colorInnerA', label: 'Color Inner A', type: 'color' },
+      { key: 'colorInnerB', label: 'Color Inner B', type: 'color' },
+      { key: 'colorCoreA', label: 'Color Core A', type: 'color' },
+      { key: 'colorCoreB', label: 'Color Core B', type: 'color' },
+    ];
 
-    const rimLight = new THREE.PointLight(0xa547ff, 2.1, 40);
-    rimLight.position.set(0, -0.4, 5);
-    scene.add(rimLight);
+    const SMOKE_CONTROLS = [
+      { key: 'count', label: 'Particle Count', min: 300, max: 5000, step: 100, rebuild: 'smoke', integer: true },
+      { key: 'size', label: 'Particle Size', min: 0.2, max: 3.0, step: 0.01 },
+      { key: 'opacity', label: 'Smoke Opacity', min: 0.05, max: 1.0, step: 0.01 },
+      { key: 'baseRadius', label: 'Base Radius', min: 0.1, max: 3.5, step: 0.01, rebuild: 'smoke' },
+      { key: 'randomRadius', label: 'Random Radius', min: 0.1, max: 5.5, step: 0.01, rebuild: 'smoke' },
+      { key: 'riseMin', label: 'Rise Min', min: 0.001, max: 0.05, step: 0.001, rebuild: 'smoke' },
+      { key: 'riseMax', label: 'Rise Max', min: 0.002, max: 0.06, step: 0.001, rebuild: 'smoke' },
+      { key: 'swirlMin', label: 'Swirl Min', min: 0.001, max: 0.05, step: 0.001, rebuild: 'smoke' },
+      { key: 'swirlMax', label: 'Swirl Max', min: 0.002, max: 0.07, step: 0.001, rebuild: 'smoke' },
+      { key: 'spreadByHeight', label: 'Spread by Height', min: 0.1, max: 5.0, step: 0.01 },
+      { key: 'noiseSpread', label: 'Noise Spread', min: 0.0, max: 1.0, step: 0.01 },
+      { key: 'noiseX', label: 'Noise X', min: 0.0, max: 0.5, step: 0.005 },
+      { key: 'noiseZ', label: 'Noise Z', min: 0.0, max: 0.5, step: 0.005 },
+      { key: 'spawnBelow', label: 'Spawn Below Impact', min: 0.2, max: 8.0, step: 0.1, rebuild: 'smoke' },
+      { key: 'spawnRange', label: 'Spawn Height Range', min: 1.0, max: 20.0, step: 0.1, rebuild: 'smoke' },
+      { key: 'resetTop', label: 'Reset Top Offset', min: 0.5, max: 15.0, step: 0.1 },
+      { key: 'resetBelow', label: 'Reset Below Impact', min: 0.1, max: 8.0, step: 0.1 },
+      { key: 'color', label: 'Smoke Color', type: 'color' },
+    ];
 
-    const topLight = new THREE.PointLight(0xf2ccff, 1.2, 24);
-    topLight.position.set(0, TOP_Y + 1.5, 3);
-    scene.add(topLight);
+    function updateStatus(msg, isError) {
+      statusText.style.color = isError ? '#ffbebe' : '#c2ffd9';
+      statusText.textContent = msg;
+      if (msg) {
+        clearTimeout(updateStatus._timer);
+        updateStatus._timer = setTimeout(() => { statusText.textContent = ''; }, 2200);
+      }
+    }
+
+    function syncJsonArea() {
+      jsonArea.value = JSON.stringify(CONFIG, null, 2);
+    }
+
+    function applyConfigChange(scope, key, rebuildFlag) {
+      if (scope === 'light') {
+        if (rebuildFlag === 'lightGeo') rebuildLightGeometry();
+        applyLightMaterialConfig();
+      }
+      if (scope === 'smoke') {
+        if (rebuildFlag === 'smoke') rebuildSmokeLayer();
+        applySmokeMaterialConfig();
+      }
+      syncJsonArea();
+    }
+
+    function createControlRow(parent, scope, control) {
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const label = document.createElement('label');
+      label.textContent = control.label;
+      row.appendChild(label);
+
+      if (control.type === 'color') {
+        const colorInput = document.createElement('input');
+        colorInput.type = 'color';
+        colorInput.className = 'color-input';
+        colorInput.value = colorToCss(CONFIG[scope][control.key]);
+        colorInput.addEventListener('input', () => {
+          CONFIG[scope][control.key] = cssToColor(colorInput.value);
+          applyConfigChange(scope, control.key, control.rebuild);
+        });
+        row.appendChild(colorInput);
+        controlMap[scope + '.' + control.key] = { input: colorInput, type: 'color' };
+      } else {
+        const wrapper = document.createElement('div');
+        wrapper.style.display = 'grid';
+        wrapper.style.gap = '2px';
+
+        const value = document.createElement('div');
+        value.className = 'value';
+
+        const input = document.createElement('input');
+        input.className = 'input';
+        input.type = 'range';
+        input.min = control.min;
+        input.max = control.max;
+        input.step = control.step;
+        input.value = CONFIG[scope][control.key];
+
+        function applyNumberValue(raw) {
+          let nextVal = parseFloat(raw);
+          if (control.integer) nextVal = Math.round(nextVal);
+          CONFIG[scope][control.key] = nextVal;
+          value.textContent = control.integer ? String(nextVal) : nextVal.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+          applyConfigChange(scope, control.key, control.rebuild);
+        }
+
+        value.textContent = control.integer ? String(Math.round(input.value)) : Number(input.value).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+        input.addEventListener('input', () => applyNumberValue(input.value));
+
+        wrapper.appendChild(value);
+        wrapper.appendChild(input);
+        row.appendChild(wrapper);
+
+        controlMap[scope + '.' + control.key] = { input, value, control, type: 'range' };
+      }
+
+      parent.appendChild(row);
+    }
+
+    function buildControls() {
+      const lightGroup = document.getElementById('lightGroup');
+      const smokeGroup = document.getElementById('smokeGroup');
+
+      LIGHT_CONTROLS.forEach((c) => createControlRow(lightGroup, 'light', c));
+      SMOKE_CONTROLS.forEach((c) => createControlRow(smokeGroup, 'smoke', c));
+    }
+
+    function refreshControlUI() {
+      Object.keys(controlMap).forEach((path) => {
+        const [scope, key] = path.split('.');
+        const ref = controlMap[path];
+        const value = CONFIG[scope][key];
+        if (ref.type === 'color') {
+          ref.input.value = colorToCss(value);
+        } else {
+          ref.input.value = value;
+          ref.value.textContent = ref.control.integer ? String(Math.round(value)) : Number(value).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+        }
+      });
+    }
+
+    function mergeConfig(source) {
+      ['light', 'smoke'].forEach((scope) => {
+        if (!source[scope] || typeof source[scope] !== 'object') return;
+        Object.keys(CONFIG[scope]).forEach((key) => {
+          if (source[scope][key] === undefined) return;
+          if (typeof CONFIG[scope][key] === 'number') {
+            const n = Number(source[scope][key]);
+            if (Number.isFinite(n)) CONFIG[scope][key] = n;
+          }
+        });
+      });
+      if (CONFIG.smoke.riseMax < CONFIG.smoke.riseMin) CONFIG.smoke.riseMax = CONFIG.smoke.riseMin;
+      if (CONFIG.smoke.swirlMax < CONFIG.smoke.swirlMin) CONFIG.smoke.swirlMax = CONFIG.smoke.swirlMin;
+    }
+
+    document.getElementById('copyJsonBtn').addEventListener('click', async () => {
+      syncJsonArea();
+      try {
+        await navigator.clipboard.writeText(jsonArea.value);
+        updateStatus('Copied config JSON.', false);
+      } catch (e) {
+        updateStatus('Cannot access clipboard in this browser.', true);
+      }
+    });
+
+    document.getElementById('applyJsonBtn').addEventListener('click', () => {
+      try {
+        const parsed = JSON.parse(jsonArea.value);
+        mergeConfig(parsed);
+        rebuildLightGeometry();
+        applyLightMaterialConfig();
+        rebuildSmokeLayer();
+        applySmokeMaterialConfig();
+        refreshControlUI();
+        syncJsonArea();
+        updateStatus('Applied JSON config.', false);
+      } catch (err) {
+        updateStatus('Invalid JSON format.', true);
+      }
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      const resetData = deepClone(DEFAULT_CONFIG);
+      Object.keys(CONFIG.light).forEach((k) => { CONFIG.light[k] = resetData.light[k]; });
+      Object.keys(CONFIG.smoke).forEach((k) => { CONFIG.smoke[k] = resetData.smoke[k]; });
+      rebuildLightGeometry();
+      applyLightMaterialConfig();
+      rebuildSmokeLayer();
+      applySmokeMaterialConfig();
+      refreshControlUI();
+      syncJsonArea();
+      updateStatus('Reset to default config.', false);
+    });
+
+    buildControls();
+    syncJsonArea();
 
     const clock = new THREE.Clock();
     let elapsed = 0;
@@ -290,23 +689,22 @@
         animatedMaterials[i].uniforms.uTime.value = elapsed;
       }
 
-      for (let i = 0; i < streamGroups.length; i++) {
-        const g = streamGroups[i];
-        const p = g.userData;
-        const phase = elapsed * 2.1 + i * 0.8;
+      if (mainStream) {
+        const p = mainStream.userData;
+        const phase = elapsed * 2.1;
 
-        g.position.z = Math.sin(elapsed * 0.7 + i * 0.6) * 0.06;
-        p.core.scale.x = 1.0 + 0.10 * Math.sin(phase);
-        p.core.scale.z = 1.0 + 0.10 * Math.cos(phase * 0.9);
-        p.inner.scale.x = 1.0 + 0.08 * Math.cos(phase * 0.9);
-        p.inner.scale.z = 1.0 + 0.08 * Math.sin(phase * 0.85);
-        p.outer.scale.x = 1.0 + 0.05 * Math.sin(phase * 0.6);
-        p.outer.scale.z = 1.0 + 0.05 * Math.cos(phase * 0.55);
+        mainStream.position.z = Math.sin(elapsed * 0.7) * CONFIG.light.zMotion;
+        p.core.scale.x = 1.0 + CONFIG.light.pulseCore * Math.sin(phase);
+        p.core.scale.z = 1.0 + CONFIG.light.pulseCore * Math.cos(phase * 0.9);
+        p.inner.scale.x = 1.0 + CONFIG.light.pulseInner * Math.cos(phase * 0.9);
+        p.inner.scale.z = 1.0 + CONFIG.light.pulseInner * Math.sin(phase * 0.85);
+        p.outer.scale.x = 1.0 + CONFIG.light.pulseOuter * Math.sin(phase * 0.6);
+        p.outer.scale.z = 1.0 + CONFIG.light.pulseOuter * Math.cos(phase * 0.55);
 
-        p.topHalo.material.opacity = 0.70 + 0.25 * (0.5 + 0.5 * Math.sin(elapsed * 2.6 + i));
+        p.topHalo.material.opacity = CONFIG.light.haloOpacity * (0.8 + 0.2 * (0.5 + 0.5 * Math.sin(elapsed * 2.6)));
       }
 
-      updateSmokeLayer(smokeLayer, elapsed);
+      if (smokeLayer) updateSmokeLayer(smokeLayer, elapsed);
 
       rimLight.intensity = 1.7 + 0.55 * Math.sin(elapsed * 2.0);
       topLight.intensity = 1.0 + 0.4 * Math.sin(elapsed * 2.7 + 0.6);
