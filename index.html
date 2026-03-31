@@ -15,306 +15,308 @@
   <script>
     /* ─── Scene / Camera / Renderer ─── */
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    scene.background = new THREE.Color(0x020206);
 
     const camera = new THREE.PerspectiveCamera(
-      60,
+      58,
       window.innerWidth / window.innerHeight,
       0.1,
       200
     );
-    camera.position.set(0, 0, 22);
-    camera.lookAt(0, 0, 0);
+    camera.position.set(0, -0.4, 24);
+    camera.lookAt(0, -0.8, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     document.body.appendChild(renderer.domElement);
 
-    /* ─── Glow-sprite texture factory ─── */
+    /* ─── Core constants ─── */
+    const TOP_Y = 9.8;
+    const IMPACT_Y = -8.7;
+    const STREAM_CENTER_X = 0;
+
+    const animatedMaterials = [];
+    const streamGroups = [];
+
+    function registerAnimatedMaterial(mat) {
+      animatedMaterials.push(mat);
+      return mat;
+    }
+
     function makeGlowTexture(centerRGBA, midRGBA, size) {
-      size = size || 128;
+      const s = size || 256;
       const c = document.createElement('canvas');
-      c.width = c.height = size;
+      c.width = c.height = s;
       const ctx = c.getContext('2d');
-      const h = size / 2;
+      const h = s * 0.5;
       const g = ctx.createRadialGradient(h, h, 0, h, h, h);
       g.addColorStop(0.0, centerRGBA);
-      g.addColorStop(0.35, midRGBA);
+      g.addColorStop(0.34, midRGBA);
       g.addColorStop(1.0, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(0, 0, size, size);
+      ctx.fillRect(0, 0, s, s);
       return new THREE.CanvasTexture(c);
     }
 
-    const TEX = {
-      // bright white-violet core
-      core  : makeGlowTexture('rgba(255,245,255,1.0)', 'rgba(230,170,255,0.7)'),
-      // medium violet inner ring
-      inner : makeGlowTexture('rgba(210,120,255,0.9)', 'rgba(140, 50,220,0.5)'),
-      // deep purple outer ring
-      outer : makeGlowTexture('rgba(110, 20,190,0.7)', 'rgba( 60,  0,120,0.3)'),
-      // near-invisible dark smoke
-      mist  : makeGlowTexture('rgba( 70,  0,110,0.3)', 'rgba( 30,  0, 60,0.08)', 256),
-      // soft neutral smoke sprite
-      smoke : makeGlowTexture('rgba(210,210,220,0.40)', 'rgba(120,120,140,0.12)', 192),
-    };
+    const haloTexture = makeGlowTexture('rgba(255,240,255,1.0)', 'rgba(170,120,255,0.42)', 256);
+    const smokeTexture = makeGlowTexture('rgba(235,235,245,0.38)', 'rgba(140,140,170,0.14)', 192);
 
-    /* ─── Waterfall geometry constants ─── */
-    const TOP_Y    =  10;   // source position
-    const BOT_Y    = -10;   // floor position
-    const H_RANGE  = TOP_Y - BOT_Y;
-    const IMPACT_Y = -8.7;  // barrier level where stream gets blocked and redirected
-    const SIDE_EXIT_FROM_CENTER = 9.5; // recycle when side-flow is far from its stream center
-    const STREAM_CENTERS = [-4.8, 0, 4.8];
+    function createStreamMaterial(colorA, colorB, intensity, alpha) {
+      return registerAnimatedMaterial(new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uColorA: { value: new THREE.Color(colorA) },
+          uColorB: { value: new THREE.Color(colorB) },
+          uIntensity: { value: intensity },
+          uAlpha: { value: alpha },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying float vY;
+          void main() {
+            vUv = uv;
+            vY = position.y;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+          uniform float uIntensity;
+          uniform float uAlpha;
+          varying vec2 vUv;
+          varying float vY;
 
-    // Radius of the flow at any height y (0 = top, 1 = bottom along t)
-    function flowRadius(y, spreadMult) {
-      const t = Math.max(0, Math.min(1, (TOP_Y - y) / H_RANGE));
-      // accelerating spread — thin at source, fan out toward floor
-      const r = 0.18 + 3.8 * Math.pow(t, 0.65) + 1.35 * Math.pow(t, 2.2);
-      return r * spreadMult;
-    }
+          void main() {
+            float yNorm = clamp((vY + 9.6) / 19.2, 0.0, 1.0);
+            float flowBands = 0.55 + 0.45 * sin(20.0 * yNorm - uTime * 7.2 + vUv.x * 6.2831);
+            float wave = 0.6 + 0.4 * sin(11.0 * yNorm - uTime * 3.6);
+            float rim = pow(1.0 - abs(vUv.x - 0.5) * 2.0, 1.2);
+            float alpha = uAlpha * rim * (0.35 + 0.65 * flowBands) * wave;
 
-    /* ─── Generic particle-system builder ─── */
-    function buildSystem(count, cfg) {
-      const pos   = new Float32Array(count * 3);
-      const speed = new Float32Array(count);    // downward speed per frame
-      const side  = new Float32Array(count);    // side-flow momentum near impact zone
-      const spill = new Float32Array(count);    // frames spent in side-flow before recycle
-
-      for (let i = 0; i < count; i++) {
-        const t = Math.random();                // 0=top … 1=bottom
-        const y = TOP_Y - t * H_RANGE;
-        const R = flowRadius(y, cfg.spreadMult);
-
-        const angle = Math.random() * Math.PI * 2;
-        // radialBias > 1 → crowd towards centre; < 1 → crowd towards edge
-        const r = Math.pow(Math.random(), cfg.radialBias) * R;
-
-        const centerX = cfg.centerX || 0;
-        pos[i * 3    ] = centerX + Math.cos(angle) * r;
-        pos[i * 3 + 1] = y;
-        pos[i * 3 + 2] = Math.sin(angle) * r * 0.25; // depth: flatten into a ribbon
-
-        // speed: slow at top, faster at bottom, some randomness
-        speed[i] = 0.025 + t * 0.09 + Math.random() * 0.03;
-        side[i] = 0;
-        spill[i] = 40 + Math.random() * 70;
-      }
-
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-
-      const mat = new THREE.PointsMaterial({
-        size       : cfg.size,
-        map        : cfg.tex,
-        color      : cfg.color,
+            vec3 col = mix(uColorA, uColorB, yNorm);
+            col *= (0.7 + 1.2 * flowBands) * uIntensity;
+            gl_FragColor = vec4(col, alpha);
+          }
+        `,
         transparent: true,
-        opacity    : cfg.opacity,
-        blending   : THREE.AdditiveBlending,
-        depthWrite : false,
-        sizeAttenuation: true,
-      });
-
-      const pts = new THREE.Points(geo, mat);
-      pts.userData = { speed, side, spill, count, cfg };
-      return pts;
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }));
     }
 
-    /* ─── Waterfall layers across multiple streams ─── */
-    const LAYER_PRESETS = [
-      {
-        count     : 1300,
-        spreadMult: 2.3,
-        radialBias: 0.52,
-        size      : 1.7,
-        tex       : TEX.mist,
-        color     : new THREE.Color(0x4c0075),
-        opacity   : 0.28,
-      },
-      {
-        count     : 3600,
-        spreadMult: 1.35,
-        radialBias: 0.85,
-        size      : 0.16,
-        tex       : TEX.outer,
-        color     : new THREE.Color(0x8b00d6),
-        opacity   : 0.62,
-      },
-      {
-        count     : 2800,
-        spreadMult: 0.76,
-        radialBias: 1.28,
-        size      : 0.20,
-        tex       : TEX.inner,
-        color     : new THREE.Color(0xe169ff),
-        opacity   : 0.78,
-      },
-      {
-        count     : 1900,
-        spreadMult: 0.38,
-        radialBias: 3.6,
-        size      : 0.26,
-        tex       : TEX.core,
-        color     : new THREE.Color(0xffffff),
-        opacity   : 0.95,
-      },
-    ];
+    function createSideMaterial(colorA, colorB, alpha) {
+      return registerAnimatedMaterial(new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uColorA: { value: new THREE.Color(colorA) },
+          uColorB: { value: new THREE.Color(colorB) },
+          uAlpha: { value: alpha },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+          uniform float uAlpha;
+          varying vec2 vUv;
 
-    const LAYERS = STREAM_CENTERS.flatMap((centerX) =>
-      LAYER_PRESETS.map((preset) =>
-        buildSystem(preset.count, { ...preset, centerX })
-      )
-    );
+          void main() {
+            float x = vUv.x;
+            float edgeY = smoothstep(0.0, 0.22, vUv.y) * (1.0 - smoothstep(0.78, 1.0, vUv.y));
+            float body = smoothstep(0.0, 0.10, x) * (1.0 - smoothstep(0.74, 1.0, x));
+            float streak = 0.5 + 0.5 * sin(30.0 * x - 8.0 * uTime + vUv.y * 10.0);
+            float alpha = uAlpha * edgeY * body * (0.32 + 0.68 * streak);
 
-    LAYERS.forEach(l => scene.add(l));
+            vec3 col = mix(uColorA, uColorB, x);
+            col *= 1.2 + 0.8 * streak;
+            gl_FragColor = vec4(col, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }));
+    }
 
-    /* ─── Surrounding smoke layer ─── */
-    function buildSmokeSystem(count, centerX) {
-      const pos      = new Float32Array(count * 3);
-      const angle    = new Float32Array(count);
-      const radius   = new Float32Array(count);
-      const rise     = new Float32Array(count);
-      const swirl    = new Float32Array(count);
-      const wobble   = new Float32Array(count);
+    function buildLightStream(centerX) {
+      const group = new THREE.Group();
+      group.position.x = centerX;
+
+      const streamHeight = TOP_Y - IMPACT_Y + 0.6;
+
+      const outer = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.80, 1.38, streamHeight, 42, 1, true),
+        createStreamMaterial(0x5910a0, 0x8828ff, 1.25, 0.42)
+      );
+      outer.position.y = (TOP_Y + IMPACT_Y) * 0.5;
+
+      const inner = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.42, 0.86, streamHeight, 34, 1, true),
+        createStreamMaterial(0x8f39ff, 0xffd9ff, 1.5, 0.62)
+      );
+      inner.position.y = (TOP_Y + IMPACT_Y) * 0.5;
+
+      const core = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.20, 0.50, streamHeight, 28, 1, true),
+        createStreamMaterial(0xc07aff, 0xffffff, 1.8, 0.82)
+      );
+      core.position.y = (TOP_Y + IMPACT_Y) * 0.5;
+
+      const topHalo = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: haloTexture,
+          color: 0xe6beff,
+          transparent: true,
+          opacity: 0.85,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        })
+      );
+      topHalo.position.set(0, TOP_Y + 0.65, 0);
+      topHalo.scale.set(3.2, 3.2, 1);
+
+      const impactHalo = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: haloTexture,
+          color: 0xdca6ff,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        })
+      );
+      impactHalo.position.set(0, IMPACT_Y - 0.35, 0);
+      impactHalo.scale.set(4.8, 2.1, 1);
+
+      const leftSpill = new THREE.Mesh(
+        new THREE.PlaneGeometry(7.8, 1.9, 1, 1),
+        createSideMaterial(0xc56fff, 0xffffff, 0.74)
+      );
+      leftSpill.position.set(-3.8, IMPACT_Y - 0.34, 0);
+      leftSpill.rotation.y = Math.PI;
+
+      const rightSpill = new THREE.Mesh(
+        new THREE.PlaneGeometry(7.8, 1.9, 1, 1),
+        createSideMaterial(0xc56fff, 0xffffff, 0.74)
+      );
+      rightSpill.position.set(3.8, IMPACT_Y - 0.34, 0);
+
+      const fogAura = new THREE.Mesh(
+        new THREE.SphereGeometry(2.9, 24, 16),
+        new THREE.MeshBasicMaterial({
+          color: 0xa26cff,
+          transparent: true,
+          opacity: 0.10,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        })
+      );
+      fogAura.position.set(0, 0.2, 0);
+
+      group.add(outer, inner, core, topHalo, impactHalo, leftSpill, rightSpill, fogAura);
+      group.userData = { outer, inner, core, topHalo, impactHalo, fogAura };
+      return group;
+    }
+
+    function buildSmokeLayer(count, centerX) {
+      const pos = new Float32Array(count * 3);
+      const angle = new Float32Array(count);
+      const radius = new Float32Array(count);
+      const rise = new Float32Array(count);
+      const swirl = new Float32Array(count);
+      const drift = new Float32Array(count);
 
       for (let i = 0; i < count; i++) {
-        const y = BOT_Y + Math.random() * (H_RANGE + 6);
-        angle[i]  = Math.random() * Math.PI * 2;
-        radius[i] = 1.4 + Math.random() * 5.0;
-        rise[i]   = 0.009 + Math.random() * 0.011;
-        swirl[i]  = 0.0045 + Math.random() * 0.006;
-        wobble[i] = Math.random() * Math.PI * 2;
-
         const ix = i * 3;
-        pos[ix]     = centerX + Math.cos(angle[i]) * radius[i];
+        const y = IMPACT_Y - 1.2 + Math.random() * (TOP_Y - IMPACT_Y + 4.0);
+        angle[i] = Math.random() * Math.PI * 2;
+        radius[i] = 0.8 + Math.random() * 2.4;
+        rise[i] = 0.010 + Math.random() * 0.014;
+        swirl[i] = 0.006 + Math.random() * 0.007;
+        drift[i] = Math.random() * Math.PI * 2;
+
+        pos[ix] = centerX + Math.cos(angle[i]) * radius[i];
         pos[ix + 1] = y;
-        pos[ix + 2] = Math.sin(angle[i]) * radius[i] * 0.45;
+        pos[ix + 2] = Math.sin(angle[i]) * radius[i] * 0.52;
       }
 
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 
       const mat = new THREE.PointsMaterial({
-        size: 1.25,
-        map: TEX.smoke,
-        color: new THREE.Color(0xc9c9d8),
+        size: 0.95,
+        map: smokeTexture,
+        color: new THREE.Color(0xd0d0e0),
         transparent: true,
-        opacity: 0.36,
+        opacity: 0.34,
         blending: THREE.NormalBlending,
         depthWrite: false,
         sizeAttenuation: true,
       });
 
-      const smoke = new THREE.Points(geo, mat);
-      smoke.userData = { count, angle, radius, rise, swirl, wobble, centerX };
-      return smoke;
+      const points = new THREE.Points(geo, mat);
+      points.userData = { count, angle, radius, rise, swirl, drift, centerX };
+      return points;
     }
 
-    const SMOKE_LAYERS = STREAM_CENTERS.map((centerX) => buildSmokeSystem(2600, centerX));
-    SMOKE_LAYERS.forEach((s) => scene.add(s));
-
-    /* ─── Ambient purple rim light (subtle) ─── */
-    const rimLight = new THREE.PointLight(0x9922ff, 1.6, 30);
-    rimLight.position.set(0, -1, 4);
-    scene.add(rimLight);
-
-    /* ─── Particle update ─── */
-    function updateLayer(sys) {
-      const pos = sys.geometry.attributes.position.array;
-      const { speed, side, spill, count, cfg } = sys.userData;
+    function updateSmokeLayer(layer, time) {
+      const pos = layer.geometry.attributes.position.array;
+      const { count, angle, radius, rise, swirl, drift, centerX } = layer.userData;
 
       for (let i = 0; i < count; i++) {
-        const ix = i * 3, iy = ix + 1, iz = ix + 2;
-        const cx = cfg.centerX || 0;
-
-        if (pos[iy] > IMPACT_Y) {
-          // free fall above the barrier
-          pos[iy] -= speed[i];
-          speed[i] += 0.00018;
-          side[i] *= 0.97;
-        } else {
-          // blocked at the bottom, then redirected to left/right side streams
-          pos[iy] = IMPACT_Y + (Math.random() - 0.5) * 0.20;
-          speed[i] *= 0.60;
-
-          const dx = pos[ix] - cx;
-          const dir = Math.abs(dx) < 0.08 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(dx);
-          side[i] = Math.min(side[i] + 0.0015 + cfg.spreadMult * 0.0011, 0.055);
-          pos[ix] += dir * (0.018 + side[i]);
-          pos[iz] += (Math.random() - 0.5) * 0.010;
-          spill[i] -= 1;
-        }
-
-        // recycle to source either after enough side-flow time or when out of bounds
-        if (spill[i] <= 0 || Math.abs(pos[ix] - cx) > SIDE_EXIT_FROM_CENTER) {
-          const R0    = flowRadius(TOP_Y, cfg.spreadMult);
-          const angle = Math.random() * Math.PI * 2;
-          const r     = Math.pow(Math.random(), cfg.radialBias) * R0;
-
-          pos[ix] = cx + Math.cos(angle) * r;
-          pos[iy] = TOP_Y + Math.random() * 2.0; // stagger re-entry
-          pos[iz] = Math.sin(angle) * r * 0.25;
-
-          speed[i] = 0.025 + Math.random() * 0.025;
-          side[i] = 0;
-          spill[i] = 40 + Math.random() * 70;
-        }
-
-        // lateral spread force: nudge each particle outward in proportion to
-        // how far down it has fallen, so the stream fans out naturally
-        const t  = Math.max(0, (TOP_Y - pos[iy]) / H_RANGE);
-        const Rx = pos[ix] - cx;
-        const Rz = pos[iz] / 0.25;           // un-squash z for force calc
-        const curR = Math.sqrt(Rx * Rx + Rz * Rz) + 1e-6; // epsilon avoids div-by-zero at centre
-        const tgtR = flowRadius(pos[iy], cfg.spreadMult);
-
-        if (curR < tgtR && pos[iy] > IMPACT_Y) {
-          const f  = 0.0006 * t;
-          pos[ix] += (Rx / curR) * f;
-          pos[iz] += (Rz / curR) * f * 0.25; // re-squash z component
-        }
-      }
-
-      sys.geometry.attributes.position.needsUpdate = true;
-    }
-
-    function updateSmokeLayer(sys, time) {
-      const pos = sys.geometry.attributes.position.array;
-      const { count, angle, radius, rise, swirl, wobble, centerX } = sys.userData;
-
-      for (let i = 0; i < count; i++) {
-        const ix = i * 3, iy = ix + 1, iz = ix + 2;
+        const ix = i * 3;
+        const iy = ix + 1;
+        const iz = ix + 2;
 
         pos[iy] += rise[i];
         angle[i] += swirl[i];
-        wobble[i] += 0.014;
+        drift[i] += 0.012;
 
-        const streamInfluence = 0.20 + 0.18 * Math.sin(time * 1.4 + pos[iy] * 0.22 + wobble[i]);
-        const targetRadius = radius[i] + streamInfluence;
+        const yNorm = Math.max(0, Math.min(1, (pos[iy] - IMPACT_Y) / (TOP_Y - IMPACT_Y + 2.0)));
+        const spread = radius[i] + yNorm * 1.6 + 0.18 * Math.sin(time * 1.7 + drift[i]);
 
-        pos[ix] = centerX + Math.cos(angle[i]) * targetRadius;
-        pos[iz] = Math.sin(angle[i]) * targetRadius * 0.45;
+        pos[ix] = centerX + Math.cos(angle[i]) * spread + Math.sin(time * 0.8 + drift[i]) * 0.05;
+        pos[iz] = Math.sin(angle[i]) * spread * 0.52 + Math.cos(time * 0.7 + drift[i]) * 0.04;
 
-        // Small horizontal noise keeps smoke from looking like a perfect ring.
-        pos[ix] += Math.sin(time * 0.9 + wobble[i]) * 0.02;
-        pos[iz] += Math.cos(time * 0.8 + wobble[i]) * 0.015;
-
-        if (pos[iy] > TOP_Y + 5.5) {
-          pos[iy] = BOT_Y - 2.5 - Math.random() * 2.5;
+        if (pos[iy] > TOP_Y + 2.7) {
+          pos[iy] = IMPACT_Y - 1.4 - Math.random() * 1.4;
           angle[i] = Math.random() * Math.PI * 2;
-          radius[i] = 1.4 + Math.random() * 5.0;
-          rise[i] = 0.009 + Math.random() * 0.011;
-          swirl[i] = 0.0045 + Math.random() * 0.006;
-          wobble[i] = Math.random() * Math.PI * 2;
+          radius[i] = 0.8 + Math.random() * 2.4;
+          rise[i] = 0.010 + Math.random() * 0.014;
+          swirl[i] = 0.006 + Math.random() * 0.007;
+          drift[i] = Math.random() * Math.PI * 2;
         }
       }
 
-      sys.geometry.attributes.position.needsUpdate = true;
+      layer.geometry.attributes.position.needsUpdate = true;
     }
 
-    /* ─── Animation loop ─── */
+    const mainStream = buildLightStream(STREAM_CENTER_X);
+    streamGroups.push(mainStream);
+    scene.add(mainStream);
+
+    const smokeLayer = buildSmokeLayer(3200, STREAM_CENTER_X);
+    scene.add(smokeLayer);
+
+    const rimLight = new THREE.PointLight(0xa547ff, 2.1, 40);
+    rimLight.position.set(0, -0.4, 5);
+    scene.add(rimLight);
+
+    const topLight = new THREE.PointLight(0xf2ccff, 1.2, 24);
+    topLight.position.set(0, TOP_Y + 1.5, 3);
+    scene.add(topLight);
+
     const clock = new THREE.Clock();
     let elapsed = 0;
 
@@ -322,18 +324,38 @@
       requestAnimationFrame(animate);
       elapsed += clock.getDelta();
 
-      LAYERS.forEach(updateLayer);
-      SMOKE_LAYERS.forEach((s) => updateSmokeLayer(s, elapsed));
+      for (let i = 0; i < animatedMaterials.length; i++) {
+        animatedMaterials[i].uniforms.uTime.value = elapsed;
+      }
 
-      // breathe the rim light intensity for a pulsing-glow feel
-      rimLight.intensity = 1.4 + 0.6 * Math.sin(elapsed * 1.8);
+      for (let i = 0; i < streamGroups.length; i++) {
+        const g = streamGroups[i];
+        const p = g.userData;
+        const phase = elapsed * 2.1 + i * 0.8;
+
+        g.position.z = Math.sin(elapsed * 0.7 + i * 0.6) * 0.06;
+        p.core.scale.x = 1.0 + 0.10 * Math.sin(phase);
+        p.core.scale.z = 1.0 + 0.10 * Math.cos(phase * 0.9);
+        p.inner.scale.x = 1.0 + 0.08 * Math.cos(phase * 0.9);
+        p.inner.scale.z = 1.0 + 0.08 * Math.sin(phase * 0.85);
+        p.outer.scale.x = 1.0 + 0.05 * Math.sin(phase * 0.6);
+        p.outer.scale.z = 1.0 + 0.05 * Math.cos(phase * 0.55);
+
+        p.topHalo.material.opacity = 0.70 + 0.25 * (0.5 + 0.5 * Math.sin(elapsed * 2.6 + i));
+        p.impactHalo.material.opacity = 0.82 + 0.16 * (0.5 + 0.5 * Math.sin(elapsed * 3.1 + i * 0.7));
+        p.fogAura.material.opacity = 0.08 + 0.05 * (0.5 + 0.5 * Math.sin(elapsed * 1.8 + i));
+      }
+
+      updateSmokeLayer(smokeLayer, elapsed);
+
+      rimLight.intensity = 1.7 + 0.55 * Math.sin(elapsed * 2.0);
+      topLight.intensity = 1.0 + 0.4 * Math.sin(elapsed * 2.7 + 0.6);
 
       renderer.render(scene, camera);
     }
 
     animate();
 
-    /* ─── Responsive resize ─── */
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
