@@ -186,20 +186,8 @@
       topHalo.position.set(0, TOP_Y + 0.65, 0);
       topHalo.scale.set(3.2, 3.2, 1);
 
-      const fogAura = new THREE.Mesh(
-        new THREE.SphereGeometry(2.9, 24, 16),
-        new THREE.MeshBasicMaterial({
-          color: 0xa26cff,
-          transparent: true,
-          opacity: 0.10,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        })
-      );
-      fogAura.position.set(0, 0.2, 0);
-
-      group.add(outer, inner, core, topHalo, fogAura);
-      group.userData = { outer, inner, core, topHalo, fogAura };
+      group.add(outer, inner, core, topHalo);
+      group.userData = { outer, inner, core, topHalo };
       return group;
     }
 
@@ -213,10 +201,10 @@
 
       for (let i = 0; i < count; i++) {
         const ix = i * 3;
-        const y = IMPACT_Y - 1.2 + Math.random() * (TOP_Y - IMPACT_Y + 4.0);
+        const y = IMPACT_Y - 2.6 + Math.random() * (TOP_Y - IMPACT_Y + 8.6);
         angle[i] = Math.random() * Math.PI * 2;
-        radius[i] = 0.8 + Math.random() * 2.4;
-        rise[i] = 0.010 + Math.random() * 0.014;
+        radius[i] = 0.9 + Math.random() * 2.9;
+        rise[i] = 0.006 + Math.random() * 0.010;
         swirl[i] = 0.006 + Math.random() * 0.007;
         drift[i] = Math.random() * Math.PI * 2;
 
@@ -229,11 +217,11 @@
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 
       const mat = new THREE.PointsMaterial({
-        size: 0.95,
+        size: 1.15,
         map: smokeTexture,
         color: new THREE.Color(0xd0d0e0),
         transparent: true,
-        opacity: 0.34,
+        opacity: 0.37,
         blending: THREE.NormalBlending,
         depthWrite: false,
         sizeAttenuation: true,
@@ -257,17 +245,17 @@
         angle[i] += swirl[i];
         drift[i] += 0.012;
 
-        const yNorm = Math.max(0, Math.min(1, (pos[iy] - IMPACT_Y) / (TOP_Y - IMPACT_Y + 2.0)));
-        const spread = radius[i] + yNorm * 1.6 + 0.18 * Math.sin(time * 1.7 + drift[i]);
+        const yNorm = Math.max(0, Math.min(1, (pos[iy] - IMPACT_Y) / (TOP_Y - IMPACT_Y + 3.6)));
+        const spread = radius[i] + yNorm * 2.2 + 0.22 * Math.sin(time * 1.7 + drift[i]);
 
         pos[ix] = centerX + Math.cos(angle[i]) * spread + Math.sin(time * 0.8 + drift[i]) * 0.05;
         pos[iz] = Math.sin(angle[i]) * spread * 0.52 + Math.cos(time * 0.7 + drift[i]) * 0.04;
 
-        if (pos[iy] > TOP_Y + 2.7) {
-          pos[iy] = IMPACT_Y - 1.4 - Math.random() * 1.4;
+        if (pos[iy] > TOP_Y + 6.2) {
+          pos[iy] = IMPACT_Y - 2.8 - Math.random() * 2.2;
           angle[i] = Math.random() * Math.PI * 2;
-          radius[i] = 0.8 + Math.random() * 2.4;
-          rise[i] = 0.010 + Math.random() * 0.014;
+          radius[i] = 0.9 + Math.random() * 2.9;
+          rise[i] = 0.006 + Math.random() * 0.010;
           swirl[i] = 0.006 + Math.random() * 0.007;
           drift[i] = Math.random() * Math.PI * 2;
         }
@@ -316,7 +304,6 @@
         p.outer.scale.z = 1.0 + 0.05 * Math.cos(phase * 0.55);
 
         p.topHalo.material.opacity = 0.70 + 0.25 * (0.5 + 0.5 * Math.sin(elapsed * 2.6 + i));
-        p.fogAura.material.opacity = 0.07 + 0.04 * (0.5 + 0.5 * Math.sin(elapsed * 1.8 + i));
       }
 
       updateSmokeLayer(smokeLayer, elapsed);
